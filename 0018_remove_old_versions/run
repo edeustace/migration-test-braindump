@@ -1,0 +1,71 @@
+#!/usr/bin/env ruby
+
+require 'mongo-db-utils/tools/commands'
+require 'json'
+
+def run(cmd)
+  puts "[run] #{cmd}"
+  process = IO.popen(cmd) do |io|
+   while line = io.gets
+    # the heroku-helper adds this to reset the ansi command - strip it
+    cleaned = line.chomp!
+    print "> #{cleaned}\n" unless cleaned.empty?
+  end
+    io.close
+    raise "An error occured" if $?.to_i != 0
+  end
+end
+
+def parse(p)
+
+  begin
+    JSON.parse(File.open(p, 'r').read)
+  rescue
+    puts "Error parsing: #{p}"
+  end
+end
+
+include MongoDbUtils::Tools
+
+collections = ["content", "itemsessions", "itemsessionsPreview"]
+
+collections.each{ |n|
+  Import.new("localhost:27017", "migration-test-db", n, "data/#{n}.json" , nil, nil, {:json_array => true, :drop => true}).run
+}
+
+cmd = "mongo localhost:27017/migration-test-db ../../migrations/0018_remove_old_versions.js"
+run(cmd)
+
+
+`mkdir -p output`
+
+collections.each{ |n|
+  file = "output/#{n}.json"
+  Export.new("localhost:27017","migration-test-db", n, "{}", file, nil, nil, {:json_array => true}).run
+
+  json = parse(file)
+  JSON.pretty_generate(json)
+  File.open(file, 'w') { |file| file.write(JSON.pretty_generate(json)) }
+}
+
+
+results = Hash.new
+
+collections.each{ |n|
+
+  puts "parse #{n}"
+  results[n] = {
+    :actual => parse("output/#{n}.json"),
+    :expected => parse("expected_output/#{n}.json")
+  }
+}
+
+collections.each{ |n|
+  results[n][:success] = results[n][:actual] == results[n][:expected]
+
+  puts "Wrong for #{n}" unless results[n][:success]
+}
+
+
+
+
